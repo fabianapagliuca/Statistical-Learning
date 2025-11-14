@@ -1,0 +1,681 @@
+---
+title: "Untitled"
+author: "Fabiana Pagliuca"
+date: "2024-04-01"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Breast Cancer 
+
+```{r}
+library(dplyr)
+library(readr)
+library(caret)
+library(gbm)
+library(readxl)
+library(corrplot)
+library(ggplot2)
+library(cowplot)
+library(randomForest)
+library(ROCR)
+library(pROC)
+library(e1071)
+```
+
+The key challenge against its detection is how to classify tumors into malignant (cancerous) or benign (non-cancerous). 
+
+```{r}
+data <- read_xlsx("/Users/fabiana/Desktop/II-MAGISTRALE/stat learning/project/breast-cancer1.xlsx")
+
+```
+
+
+-  Attribute Information:
+1. ID number
+2. Diagnosis (M = malignant, B = benign)
+
+-  Ten features were computed for each cell nucleus:
+1. radius: mean of distances from center to points on the perimeter
+2. texture: standard deviation of grey-scale values
+3. perimeter
+4. area: Number of pixels inside contour + 1⁄2 for pixels on perimeter
+5. smoothness: local variation in radius lengths), , t
+6. compactness: perimeterˆ2 / area – 1.0 ; this dimensionless number is at a minimum with a circular disk and increases with the irregularity of the boundary, but this measure also increases for elongated cell nuclei, which is not indicative of malignancy
+7. concavity: severity of concave portions of the contour
+8. concave points: number of concave portions of the contour
+9. symmetry.
+
+
+The mean, standard error and "worst" or largest (mean of the three largest values) of these features were computed for each image, resulting in 30 features.
+For instance, field 3 is Mean Radius, field 13 is Radius SE, field 23 is Worst Radius. 
+
+
+
+```{r}
+head(data)
+```
+
+
+```{r}
+colnames(data)
+```
+
+```{r}
+dim(data)
+str(data)
+#Check for NAs
+sum(is.na(data))
+```
+
+
+
+```{r}
+data <- rename(data,
+                   concave_points_mean = 'concave points_mean',
+                   concave_points_worst = 'concave points_worst',
+                  concave_points_se =  'concave points_se')
+
+data <- subset(data, select = -c(id))
+```
+
+
+```{r}
+data$diagnosis <- as.factor(data$diagnosis)
+```
+
+```{r}
+data$diagnosis <- ifelse(data$diagnosis  == "M", 0, 1)
+```
+
+```{r}
+prop.table(table(data$diagnosis))
+```
+
+
+## Correlation matrix 
+
+```{r}
+correlationMatrix <- cor(data[,2:ncol(data)])
+corrplot(correlationMatrix, tl.cex = 1, addrect = 8)
+```
+From the correlation matrix, we can notice that there is high positive corrleation between:
+
+ - perimeter mean and area worst;
+ - texture mean and texture worst;
+ - concavity mean and concave points mean
+ - concave point mean and compactness
+ - perimeter_worst and radius_worst;
+
+```{r}
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.9) 
+print(highlyCorrelated)
+```
+
+- 2 Texture mean  3 perimeter mean
+- 7 concavity_mean"  8  "concave points_mean
+- 23 perimeter_worst"  24  "area_worst"
+
+We can remove them form our dataset: 
+
+```{r}
+data1 <- data[, -highlyCorrelated]
+```
+
+
+## Princiapl component Analysis
+
+Firstly, we apply the dimension technique on our complete data set (with 31 variables)
+
+```{r}
+pc.result = prcomp(data[,2:ncol(data)],scale. = TRUE, center = TRUE)
+```
+
+```{r}
+sd = pc.result$sdev
+p = length(sd)
+eigenvalues <- pc.result$sdev^2
+eigenvalues/sum(eigenvalues)
+```
+
+
+```{r}
+layout(cbind(1,2))
+plot(sd^2/sum(sd^2),type="o",pch=19,xlab="Component", main = "Scree plot",ylab='Proportion of variance')
+abline(h=1/p,col='gray')
+
+plot(cumsum(sd^2)/sum(sd^2),type="o",pch=19,xlab="Component", main = "Cumulative scree plot",ylab='Proportion of variance',ylim=c(0,1))
+abline(h=0.95,col='gray')
+```
+
+15 component explain 95% of variability 
+
+```{r}
+summary(pc.result)
+```
+Then, we try to apply the pca on *data1*
+
+```{r}
+pc.result1 = prcomp(data1[,3:ncol(data1)],scale. = TRUE, center = TRUE)
+```
+
+```{r}
+sd1 = pc.result1$sdev
+p = length(sd1)
+eigenvalues1 <- pc.result1$sdev^2
+eigenvalues1/sum(eigenvalues1)
+```
+
+
+```{r}
+layout(cbind(1,2))
+plot(sd1^2/sum(sd1^2),type="o",pch=19,xlab="Component", main = "Scree plot",ylab='Proportion of variance')
+abline(h=1/p,col='gray')
+
+plot(cumsum(sd1^2)/sum(sd1^2),type="o",pch=19,xlab="Component", main = "Cumulative scree plot",ylab='Proportion of variance',ylim=c(0,1))
+abline(h=0.85,col='gray')
+```
+
+
+```{r}
+summary(pc.result1)
+```
+
+```{r}
+pc.loading = pc.result$rotation
+```
+
+
+```{r}
+pc.loading1 = pc.result1$rotation
+```
+
+```{r}
+
+# PC1
+plot1 <- ggplot(data, aes(x = pc.result1$x[,1], fill = factor(diagnosis))) +
+  geom_density(alpha = 0.5) +
+  labs(x = "Prima componente principale", y = "Densità", fill = "Diagnosis") +
+  scale_fill_manual(values = c("#0F7078", "#42132B")) +
+  theme_minimal() +
+  ggtitle("PC1 vs Density")
+
+# PC2
+plot2 <- ggplot(data, aes(x = pc.result1$x[,2], fill = factor(diagnosis))) +
+  geom_density(alpha = 0.5) +
+  labs(x = "Seconda componente principale", y = "Densità", fill = "Diagnosis") +
+  scale_fill_manual(values = c("#0F7078", "#42132B")) +
+  theme_minimal() +
+  ggtitle("PC2 vs Density")
+
+plot_grid(plot1, plot2, ncol = 2)
+```
+
+```{r}
+ggplot(data, aes(x = pc.result1$x[,1], y = pc.result1$x[,2], color = factor(diagnosis))) +
+  geom_point(size = 3, alpha = 0.7) +
+  labs(x = "Prima componente principale", y = "Seconda componente principale", color = "Diagnosis") +
+  scale_color_manual(values = c("#0F7078", "#42132B")) +
+  theme_minimal() +
+  ggtitle("Distribuzione delle componenti principali rispetto alla Diagnosis")
+```
+
+
+# Classification model:
+
+```{r}
+df_final <- data1
+```
+
+ 
+```{r}
+data_scaled = as.data.frame(scale(df_final[,-1])) # SCALE
+data_scaled = cbind(data_scaled, diagnosis = df_final$diagnosis)
+
+# selecting train and test sets
+n = dim(data_scaled)[1]
+set.seed(1)
+select.train = sample(1:n,n*8/10)
+train_class = as.data.frame(data_scaled[select.train,])
+test_class = as.data.frame(data_scaled[-select.train,])
+```
+
+
+## Logistic Regression
+
+```{r}
+logit = glm(diagnosis ~.  ,data=train_class, family='binomial')
+summary(logit)
+```
+
+
+```{r}
+yhat.logit <- predict(logit, newdata = test_class, type = 'response')
+prediction.logit <- factor(ifelse(yhat.logit > 0.5, 1, 0), levels = c(0, 1))
+#levels(prediction.logit) <- levels(test_class$diagnosis)
+
+cm_logit <- confusionMatrix(prediction.logit, factor(test_class$diagnosis))
+cm_logit
+
+```
+
+## Random Forest 
+
+```{r message=FALSE, warning=FALSE}
+
+set.seed(21)
+
+accuracy <- double(dim(df_final)[2] - 1)
+#recall <- double(dim(dataset)[2] - 1)
+
+for(mtry in 1:(dim(df_final)[2] - 1)) {
+  rf <- randomForest(factor(diagnosis) ~ . ,
+                     data = train_class,
+                     mtry = mtry,
+                     ntree = 400) 
+  
+  pred <- predict(rf, test_class, type = "response") # Predictions on Test Set for each Tree
+  accuracy[mtry] <- confusionMatrix(data = pred, reference = factor(test_class$diagnosis))$overall["Accuracy"]
+  
+  #recall[mtry] <- confusionMatrix(data = pred, reference = test$HeartDisease)$overall["Sensitivity"]
+  
+  cat(mtry, " ")
+}
+
+
+```
+
+
+```{r}
+matplot(1:(dim(df_final)[2]-1) , accuracy, pch=19 , col="red",type="b",
+        ylab="Mean Squared Error",xlab="Number of Predictors Considered at each Split")
+legend("topright",legend="Out of Bag Error",pch=19, col="red")
+
+```
+
+
+```{r}
+rf_result =randomForest(factor(diagnosis) ~ . ,
+                        data= train_class,
+                        mtry= 3,
+                        ntree= 1000, 
+                        importance = TRUE) 
+
+```
+
+```{r}
+prediction.RF = predict(rf_result, test_class)
+cm.RF <- confusionMatrix(data=prediction.RF,factor(test_class$diagnosis))
+cm.RF
+```
+
+
+```{r}
+importance(rf_result)
+```
+
+- "MeanDecreaseAccuracy" indica quanto l'importanza della variabile contribuisce alla precisione del modello.
+- "MeanDecreaseGini" indica quanto l'importanza della variabile contribuisce alla riduzione dell'impurità nei nodi dell'albero.
+
+
+```{r}
+varImpPlot(rf_result)
+```
+
+## KNN 
+
+```{r}
+#train_class$diagnosis <- as.numeric(train_class$diagnosis)
+#test_class$diagnosis <- as.numeric(test_class$diagnosis)
+k.explore <- 1:15
+set.seed(1)
+nfolds <- 10
+folds <- sample(1:nfolds, dim(train_class)[1], replace = TRUE)
+CVerror <- matrix(ncol = length(k.explore), nrow = nfolds)
+
+for (j in 1:nfolds) {
+  for (k in k.explore) {
+    prediction.KNN <- class::knn(train_class[folds != j, -25], 
+                                  train_class[folds == j,-25 ], 
+                                  cl = train_class[folds != j, 25], 
+                                  k = k) 
+    CVerror[j, k] <- mean(prediction.KNN != train_class[folds == j, 25])
+  }
+}
+plot(colMeans(CVerror), type = 'b', lwd = 3)
+
+```
+
+k = 3
+
+```{r}
+prediction.KNN = class::knn(train_class[,-25],test_class[,-25], cl=train_class[,25], k=3, prob=TRUE) 
+cm.KNN <- confusionMatrix(data = prediction.KNN, reference = factor(test_class$diagnosis))
+cm.KNN
+```
+
+
+
+```{r}
+rocplot=function(pred, truth, ...){
+  predob = prediction(pred, truth)
+  perf = performance(predob , "tpr", "fpr") 
+  plot(perf ,...)
+  auc = performance(predob , "auc")
+  return(attributes(auc)$y.values)
+}
+
+yhat.KNN = attr(prediction.KNN,"prob")
+yhat.KNN = ifelse(prediction.KNN == '1', 1-yhat.KNN, yhat.KNN) 
+
+auc.KNN = rocplot(pred= -yhat.KNN, truth = test_class$diagnosis, lwd=2, colorize=TRUE)
+text(0.8,0.2,paste0('AUC=',round(auc.KNN[[1]],4)),font=2)
+```
+
+
+## SVM: Support Vector Machine
+
+
+```{r}
+# We can again use tune() to compute the optimal cost via CV:
+set.seed(1)
+tune.out1 <- tune(svm, diagnosis~., data = train_class, kernel="radial",
+              ranges=list(cost=c(0.1,1,10,100,1000),
+                          gamma=c(0.5,1,2,3,4) ))
+
+bestmod.SVM <- tune.out1$best.model
+summary(bestmod.SVM)
+```
+
+
+```{r}
+best_model <- tune.out1$best.model
+pred_svm <- predict(best_model, newdata = test_class)
+predictions <- factor(ifelse(pred_svm>= 0.5, "1", "0"))
+cm.SVM <- confusionMatrix(predictions, factor(test_class$diagnosis))
+cm.SVM
+```
+
+### ROC curve 
+
+
+```{r}
+opt.svm <-svm(diagnosis~., data=train_class, 
+              kernel="radial", 
+              gamma = 0.5,
+              cost= 1)
+
+yhat.optSVM <- attributes(predict(opt.svm,test_class,decision.values=TRUE))$decision.values
+
+auc.SVM <- rocplot(pred=yhat.optSVM,truth=test_class$diagnosis,lwd=2,colorize=TRUE)
+text(0.8,0.2,paste0('AUC=',round(auc.SVM[[1]],4)),font=2)
+```
+
+## Boosting
+
+```{r}
+library(gbm)
+
+boost.result <- gbm(diagnosis ~ ., data = train_class, 
+                    n.trees = 100, 
+                    interaction.depth = 2,
+                    shrinkage = 0.1)
+
+
+yhat.boost <- predict(boost.result, newdata = test_class, n.trees = 100, type = "response")
+
+# Calcola il Mean Squared Error (MSE)
+MSE.boost <- mean((yhat.boost - as.numeric(test_class$diagnosis))^2)
+plot(yhat.boost, test_class$diagnosis)
+MSE.boost
+
+```
+
+```{r}
+# Create confusion matrix
+# Create confusion matrix
+boost_pred <- predict.gbm(object = boost.result, newdata = test_class, n.trees = 500, type = "response")
+boost_pred <- boost_pred  # Seleziona solo la colonna delle probabilità predette
+
+# Convert predicted probabilities to predicted classes based on the threshold
+predicted_classes <- ifelse(boost_pred >= 0.2, 1, 0)
+# Calcola e visualizza la matrice di confusione
+confusionMatrix(factor(predicted_classes), factor(test_class$diagnosis))
+```
+
+
+
+## PCA DATASET
+
+```{r}
+data.pca <- as.data.frame(pc.result1$x[, 1:9])
+data.pca <- cbind(data.pca, diagnosis = df_final$diagnosis)
+```
+
+## Classification model: 
+
+## Logistic 
+```{r}
+# selecting train and test sets
+n = dim(data.pca)[1]
+set.seed(1)
+select.train1 = sample(1:n,n*8/10)
+train.pca = as.data.frame(data.pca[select.train1,])
+test.pca = as.data.frame(data.pca[-select.train1,])
+```
+
+
+```{r}
+logit.pca = glm(diagnosis ~.  ,data=train.pca, family='binomial')
+summary(logit.pca)
+```
+
+```{r}
+yhat.logit1 <- predict(logit.pca, newdata = test.pca, type = 'response')
+prediction.logit1 <- factor(ifelse(yhat.logit1 > 0.5, 1, 0), levels = c(0, 1))
+cm_logit1 <- confusionMatrix(prediction.logit1, factor(test.pca$diagnosis))
+cm_logit1
+```
+
+```{r}
+
+cm_df.logit <- as.data.frame(cm_logit1$table)
+colnames(cm_df.logit) <- c("Predicted", "Actual", "Count")
+
+# Definizione di una palette di colori personalizzata con tonalità di celeste e rosa pastello
+color_palette <- c("#B0E0E6", "#87CEEB", "#FFC0CB", "#FFB6C1")
+
+# Disegno della matrice di confusione con colori personalizzati
+confusion_plot.logit <- ggplot(cm_df.logit, aes(x=Predicted, y=Actual, fill=Count)) +
+  geom_tile(color="black") +
+  geom_text(aes(label=Count), color="black", size=4) +  
+  labs(title="Confusion Matrix", x="Predicted", y="Actual") +
+  scale_fill_gradient(low = color_palette[1], high = color_palette[length(color_palette)], na.value = "grey50", guide = "colorbar") +
+  scale_x_discrete(position = "top") +
+  scale_y_discrete(position = "right") +
+  theme_minimal()
+
+print(confusion_plot.logit)
+
+
+
+```
+
+
+
+## Random Forest 
+
+```{r}
+set.seed(21)
+
+accuracy1 <- double(dim(data.pca)[2] - 1)
+#recall <- double(dim(dataset)[2] - 1)
+
+for(mtry in 1:(dim(data.pca)[2] - 1)) {
+  rf.pca <- randomForest(factor(diagnosis) ~ . ,
+                     data = train.pca,
+                     mtry = mtry,
+                     ntree = 400) 
+  
+  pred1 <- predict(rf.pca, test.pca, type = "response") # Predictions on Test Set for each Tree
+  accuracy1[mtry] <- confusionMatrix(data = pred1, reference = factor(test.pca$diagnosis))$overall["Accuracy"]
+  
+  #recall[mtry] <- confusionMatrix(data = pred, reference = test$HeartDisease)$overall["Sensitivity"]
+  
+  cat(mtry, " ")
+}
+
+```
+
+
+
+```{r}
+matplot(1:(dim(data.pca)[2]-1) , accuracy1, pch=19 , col="red",type="b",
+        ylab="Mean Squared Error",xlab="Number of Predictors Considered at each Split")
+legend("topright",legend="Out of Bag Error",pch=19, col="red")
+```
+
+```{r}
+rf_result1 =randomForest(factor(diagnosis) ~ . ,
+                        data= train.pca,
+                        mtry= 2,
+                        ntree= 1000, 
+                        importance = TRUE) 
+```
+
+
+
+```{r}
+prediction.RF1 = predict(rf_result1, test.pca)
+cm.RF1 <- confusionMatrix(data=prediction.RF1,factor(test.pca$diagnosis))
+cm.RF1
+```
+
+
+```{r}
+cm_df.RF <- as.data.frame(cm.RF1$table)
+colnames(cm_df.RF) <- c("Predicted", "Actual", "Count")
+
+color_palette <- c("#B0E0E6", "#87CEEB", "#FFC0CB", "#FFB6C1")
+
+# Disegno della matrice di confusione con colori personalizzati
+confusion_plot.RF <- ggplot(cm_df.RF, aes(x=Predicted, y=Actual, fill=Count)) +
+  geom_tile(color="black") +
+  geom_text(aes(label=Count), color="black", size=4) +  
+  labs(title="Confusion Matrix", x="Predicted", y="Actual") +
+  scale_fill_gradient(low = color_palette[1], high = color_palette[length(color_palette)], na.value = "grey50", guide = "colorbar") +
+  scale_x_discrete(position = "top") +
+  scale_y_discrete(position = "right") +
+  theme_minimal()
+
+print(confusion_plot.RF)
+```
+
+
+
+
+## KNN 
+
+```{r}
+k.explore <- 1:15
+set.seed(1)
+nfolds1 <- 10
+folds1 <- sample(1:nfolds1, dim(train.pca)[1], replace = TRUE)
+CVerror1 <- matrix(ncol = length(k.explore), nrow = nfolds1)
+
+for (j in 1:nfolds1) {
+  for (k in k.explore) {
+    prediction.KNN1 <- class::knn(train.pca[folds1 != j, -10], 
+                                  train.pca[folds1 == j,-10 ], 
+                                  cl = train.pca[folds1 != j, 10], 
+                                  k = k) 
+    CVerror1[j, k] <- mean(prediction.KNN1 != train.pca[folds1 == j, 10])
+  }
+}
+plot(colMeans(CVerror1), type = 'b', lwd = 3)
+
+```
+
+k = 5
+
+```{r}
+prediction.KNN1 = class::knn(train.pca[,-10],test.pca[,-10], cl=train.pca[,10], k=5, prob=TRUE) 
+cm.KNN1 <- confusionMatrix(data = prediction.KNN1, reference = factor(test.pca$diagnosis))
+cm.KNN1
+```
+
+
+```{r}
+cm_df.KNN1 <- as.data.frame(cm.KNN1$table)
+colnames(cm_df.KNN1) <- c("Predicted", "Actual", "Count")
+
+# Definizione di una palette di colori personalizzata con tonalità di celeste e rosa pastello
+color_palette <- c("#B0E0E6", "#87CEEB", "#FFC0CB", "#FFB6C1")
+
+# Disegno della matrice di confusione con colori personalizzati
+confusion_plot.KNN1 <- ggplot(cm_df.RF, aes(x=Predicted, y=Actual, fill=Count)) +
+  geom_tile(color="black") +
+  geom_text(aes(label=Count), color="black", size=4) +  
+  labs(title="Confusion Matrix", x="Predicted", y="Actual") +
+  scale_fill_gradient(low = color_palette[1], high = color_palette[length(color_palette)], na.value = "grey50", guide = "colorbar") +
+  scale_x_discrete(position = "top") +
+  scale_y_discrete(position = "right") +
+  theme_minimal()
+
+print(confusion_plot.KNN1)
+```
+
+
+
+```{r}
+rocplot=function(pred, truth, ...){
+  predob = prediction(pred, truth)
+  perf = performance(predob , "tpr", "fpr") 
+  plot(perf ,...)
+  auc = performance(predob , "auc")
+  return(attributes(auc)$y.values)
+}
+
+yhat.KNN1 = attr(prediction.KNN1,"prob")
+yhat.KNN1 = ifelse(prediction.KNN1 == '1', 1-yhat.KNN1, yhat.KNN1) 
+
+auc.KNN1 = rocplot(pred = -yhat.KNN1, truth = test.pca$diagnosis, lwd=2, colorize=TRUE)
+text(0.8,0.2,paste0('AUC=',round(auc.KNN1[[1]],4)),font=2)
+```
+
+## SVM: Support Vector Machine
+
+```{r}
+# We can again use tune() to compute the optimal cost via CV:
+set.seed(1)
+tune.out_pca <- tune(svm, diagnosis ~., data = train.pca, kernel="radial",
+              ranges=list(cost=c(0.1,1,10,100,1000),
+                          gamma=c(0.5,1,2,3,4) ))
+
+bestmod.SVM1 <- tune.out_pca$best.model
+summary(bestmod.SVM1)
+```
+
+
+```{r}
+best_model1 <- tune.out_pca$best.model
+pred_svm1 <- predict(best_model1, newdata = test.pca)
+predictions1 <- factor(ifelse(pred_svm1 >= 0.5, "1", "0"))
+cm.SVM1 <- confusionMatrix(predictions1, factor(test.pca$diagnosis))
+cm.SVM1
+```
+
+```{r}
+opt.svm1 <-svm(diagnosis~., data=train.pca, 
+              kernel="radial", 
+              gamma = 0.5,
+              cost= 1)
+
+yhat.optSVM1 <- attributes(predict(opt.svm1,test.pca,decision.values=TRUE))$decision.values
+
+auc.SVM1 <- rocplot(pred=yhat.optSVM1,truth=test.pca$diagnosis,lwd=2,colorize=TRUE)
+text(0.8,0.2,paste0('AUC=',round(auc.SVM1[[1]],4)),font=2)
+```
+`
+
